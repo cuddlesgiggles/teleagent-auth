@@ -2,13 +2,10 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createCipheriv, randomBytes } from "node:crypto"
 import { join } from "node:path"
-import { BASE, NPM, PROVIDER, SAPI, appVersion, catalogFile, configModels, deviceMeta, gatewayHeaders, hmacHex, isoBeijing, jwtThirdSegment, mergedModels, modelOf, osType, parseLive, parseLocal, parsePoints, pathsFor, sha256Hex, signInOf, signChatHeaders, userDirs, versionFromLogs } from "../teleagent.mjs"
+import { BASE, DEFAULT_RELAY_KEY, NPM, PROVIDER, SAPI, appVersion, catalogFile, configModels, deviceMeta, gatewayHeaders, hmacHex, isoBeijing, jwtThirdSegment, mergedModels, modelOf, osType, parseLive, parseLocal, parsePoints, relayKey, pathsFor, sha256Hex, signInOf, signChatHeaders, userDirs, versionFromLogs } from "../teleagent.mjs"
 import { encryptedKey, unwrap } from "../safestore.mjs"
 
 const NOW = Date.parse("2026-10-17T04:00:00Z") // 2026-10-17 12:00 北京时间
-
-// the package ships no relay key; the tests run against a placeholder of the same shape
-process.env.TELEAGENT_RELAY_KEY = "sk-placeholder-relay-key"
 
 test("the gateway needs its five over the relay key; the chat sends the app's own group", () => {
   const g = gatewayHeaders({ token: "T", appVersion: "2.7.0.000", os: "Windows", now: NOW, nonce: "N" })
@@ -34,13 +31,15 @@ test("the gateway needs its five over the relay key; the chat sends the app's ow
   assert.deepEqual(deviceMeta(pathsFor("/nope").root), { deviceId: "", installId: "" })
 })
 
-test("no relay key in the package: the headers ask for it instead of shipping one", () => {
-  const saved = process.env.TELEAGENT_RELAY_KEY
+test("the relay key is the client's own constant, and the env var wins over it", () => {
+  const hdr = gatewayHeaders({ token: "T", appVersion: "2.7.0.000", os: "Windows", now: NOW, nonce: "N" })
+  assert.equal(hdr.authorization, "Bearer " + DEFAULT_RELAY_KEY)
+  assert.equal(signChatHeaders({ ...SIGN_KAT, method: "POST", body: "", deviceId: "D" }).authorization, "Bearer " + DEFAULT_RELAY_KEY)
+  process.env.TELEAGENT_RELAY_KEY = "sk-rotated-by-a-later-build"
+  assert.equal(relayKey(), "sk-rotated-by-a-later-build")
+  assert.equal(gatewayHeaders({ token: "T", appVersion: "2.7.0.000", os: "Windows", now: NOW, nonce: "N" }).authorization, "Bearer sk-rotated-by-a-later-build")
   delete process.env.TELEAGENT_RELAY_KEY
-  assert.throws(() => gatewayHeaders({ token: "T", appVersion: "2.7.0.000", os: "Windows", now: NOW, nonce: "N" }), /TELEAGENT_RELAY_KEY/)
-  assert.throws(() => signChatHeaders({ ...SIGN_KAT, method: "POST", body: "", deviceId: "D" }), /TELEAGENT_RELAY_KEY/)
-  process.env.TELEAGENT_RELAY_KEY = saved
-  assert.equal(gatewayHeaders({ token: "T", appVersion: "2.7.0.000", os: "Windows", now: NOW, nonce: "N" }).authorization, "Bearer sk-placeholder-relay-key")
+  assert.equal(relayKey(), DEFAULT_RELAY_KEY)
 })
 
 // ── the signature: einoprovider.(*GatewaySigner).Sign ─────────────────────────

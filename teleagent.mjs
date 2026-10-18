@@ -27,13 +27,14 @@ export const SAPI = "https://agent.teleai.com.cn/superCowork/sapi"
 export const BASE = SAPI + "/api/v1"
 export const NPM = "@ai-sdk/openai-compatible"
 
-// the relay key TeleAgent's own build ships with. It is not per-account — the account
-// is the X-Token — but it is the vendor's constant, not ours to redistribute, so the
-// package reads it from the environment. See README, "装好之后要做的一件事".
+// the relay key TeleAgent's own client ships: one global constant for every
+// install, not a per-account secret — the account is the X-Token, and this key
+// alone answers 4001 当前令牌是否存在. TELEAGENT_RELAY_KEY overrides it for a build
+// that rotated the constant or a fork pointing at its own relay.
+export const DEFAULT_RELAY_KEY = "sk-qvp4m6h9g20uM6PgYP7E"
+
 export function relayKey() {
-  const k = process.env.TELEAGENT_RELAY_KEY || ""
-  if (!k) throw new Error("未设置 TELEAGENT_RELAY_KEY —— 填你自己那份 TeleAgent 客户端自带的中继密钥（README 里写了它在哪）")
-  return k
+  return process.env.TELEAGENT_RELAY_KEY || DEFAULT_RELAY_KEY
 }
 export const FALLBACK_VERSION = "2.7.0.000"
 

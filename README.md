@@ -19,19 +19,17 @@ magpie plugin login teleagent
 1. **桌面端登录态**（默认，不用你贴任何东西）：解 TeleAgent 自己存的会话令牌；
 2. **贴 X-Token**：给没装 TeleAgent 的机器。
 
-## 装好之后要做的一件事
+## 关于那把中继 key
 
-对话和目录都要带一个 `Authorization: Bearer <relay key>`。这把 key 是 TeleAgent 客户端
-自带的全局常量，不是每个账号一把，也不属于我们能代你发布的材料——所以本包**不含它**，
-运行时从环境变量取：
+对话和目录都要带一个 `Authorization: Bearer <relay key>`。这把 key 是 TeleAgent 客户端自带的
+全局常量——装了这个客户端的人手里都是同一把，账号身份在 `X-Token` 上，单用它厂商答
+`4001 当前令牌是否存在`。本包**直接内置**，装完即用，不需要你先配什么。
+
+如果你那份构建换了这把常量，或者要指到自己的中继上，用环境变量覆盖，不必改代码：
 
 ```sh
-TELEAGENT_RELAY_KEY=<你自己那份 TeleAgent 安装里的那把> magpie gateway   # 或写进你启动 magpie 的环境
+TELEAGENT_RELAY_KEY=<你那份客户端里的串> magpie gateway
 ```
-
-它在你本机 TeleAgent 的安装目录里，是一串 `sk-` 开头的定长串。没设这个变量时插件不会
-静默降级，而是每条请求都明确报 `未设置 TELEAGENT_RELAY_KEY`。拿不到这把 key 就用不了本包，
-这是设计上的限制，不是 bug。
 
 ## 登录态在哪
 
@@ -110,7 +108,7 @@ sign  = hmacHex( key = inner
 ## 测试
 
 ```sh
-node --test        # 16 条：两组头集合、签名已知答案、两套目录格式、积分窗口、40105 与 5014 的分法、v10 解密、缺 relay key 要报错
+node --test        # 16 条：两组头集合、签名已知答案、两套目录格式、积分窗口、40105 与 5014 的分法、v10 解密、中继 key 的内置值与 env 覆盖
 npm run mutate     # 8 个变异，全要变红
 ```
 

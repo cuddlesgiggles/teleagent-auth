@@ -27,9 +27,9 @@ const MUTS = [
     'return createHash("sha1").update(toBytes(data)).digest("hex")'],
   ["teleagent.mjs", "the relay key is sent blank",
     'authorization: "Bearer " + relayKey(),', 'authorization: "Bearer ",'],
-  ["teleagent.mjs", "a missing relay key is tolerated instead of refused",
-    '  if (!k) throw new Error("未设置 TELEAGENT_RELAY_KEY —— 填你自己那份 TeleAgent 客户端自带的中继密钥（README 里写了它在哪）")',
-    '  if (!k) return ""'],
+  ["teleagent.mjs", "the shipped relay constant is emptied",
+    'export const DEFAULT_RELAY_KEY = "sk-qvp4m6h9g20uM6PgYP7E"',
+    'export const DEFAULT_RELAY_KEY = ""'],
 ];
 
 rmSync(DST, { recursive: true, force: true });
