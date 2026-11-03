@@ -16,10 +16,10 @@
 // answered 400 messages: at least one message is required — past the signature
 // gate and into payload validation — with a 200 SSE stream from chat-flash after
 // that. See the block above signChatHeaders for the exact scheme.
-import { createHash, createHmac } from "node:crypto"
-import { readdirSync, readFileSync, statSync } from "node:fs"
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto"
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 
 export const PROVIDER = "teleagent"
 export const SITE_NAME = "TeleAgent"
@@ -124,6 +124,33 @@ export function deviceMeta(root) {
   }
 }
 
+// A gateway request must carry both device headers; the desktop app's
+// device-meta.json is where they usually come from. A machine without the app
+// (a web sign-in on macOS/Linux) has no such file, and the gateway answers
+// `40101 missing super agent signature headers` when either header is absent.
+// The pair is not in the JWT (its claims name the account, not the machine), and
+// the gateway accepts a pair it has not seen before, so one is made once and
+// kept: the same install must keep the same ids, or every request looks like a
+// new device.
+export function deviceFileDefault(home = homedir()) {
+  return join(process.env.MAGPIE_CONFIG_DIR || join(home, ".config", "magpie"), "teleagent-device.json")
+}
+
+export function loadOrCreateDevice(file = deviceFileDefault()) {
+  try {
+    const v = JSON.parse(readFileSync(file, "utf8"))
+    if (typeof v?.deviceId === "string" && /^[0-9a-f]{12}$/i.test(v.deviceId) && typeof v?.installId === "string" && v.installId) {
+      return { deviceId: v.deviceId, installId: v.installId }
+    }
+  } catch {}
+  const made = { deviceId: randomBytes(6).toString("hex"), installId: randomUUID() }
+  try {
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify(made, null, 2), { mode: 0o600 })
+  } catch {}
+  return made
+}
+
 export function pathsFor(home = homedir(), userData) {
   const root =
     userData ||
@@ -152,9 +179,22 @@ export function userDirs(dir) {
   return names.filter((n) => mtime(n) > 0).sort((a, b) => mtime(b) - mtime(a))
 }
 
-export function tokenFileFor(home, userData) {
+// tokenFileFor picks the sign-in file to read. Without an accountId it is the
+// newest one; an accountId (the user folder name, with or without the
+// `v1_public_` prefix) asks for that account alone. A seat that names an
+// account the app no longer holds gets null rather than another account's
+// token: a seat must never spend someone else's credential.
+export function tokenFileFor(home, userData, accountId) {
   const p = pathsFor(home, userData)
-  for (const u of userDirs(p.users)) {
+  const dirs = userDirs(p.users)
+  const want = String(accountId ?? "").replace(/^v1_public_/, "")
+  let ordered = dirs
+  if (want) {
+    const hit = dirs.filter((u) => u === want || u === "v1_public_" + want)
+    if (!hit.length) return null
+    ordered = hit
+  }
+  for (const u of ordered) {
     const f = join(p.users, u, "app-auth", "token.json")
     try {
       if (readFileSync(f)) return { file: f, userDir: u, root: p.root, localState: p.localState }
@@ -379,4 +419,181 @@ export function signInOf(status, text) {
   if (status === 402 && /["']?code["']?\s*:\s*["']?5014(?![\d.])/.test(s)) return "expired"
   if (/"code"\s*:\s*"?4001/.test(s) || /当前令牌|令牌不能为空/.test(s)) return "expired"
   return "kept"
+}
+
+// ── web sign-in: the official page hands back a code, the gateway trades it ──
+// The desktop app's sign-in window and the web page both end on
+// `.../cowork/auth?code=...`; the code is a one-time grant, not the session
+// token. The gateway trades it at /cowork/auth for the JWT the request
+// signature is keyed on. Reading that JWT out of a browser cookie is possible
+// only from a browser this code owns (the app uses its own Electron partition),
+// so the paste path below takes either the callback URL or the code itself.
+export const AUTH_ENDPOINT = "https://agent.teleai.com.cn/superCowork/sapi/cowork/auth"
+export const LOGIN_PAGE_URL = AUTH_ENDPOINT + "?source=01"
+
+const JWT_RE = /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/
+
+// parseCredential reads what a user pastes. A callback URL may carry `token`
+// (final) or `code` (still to trade); a bare value may be the app's
+// `tenant:jwt`, a bare JWT, or the `ucc.…` authorization code the web page
+// leaves behind. Anything else is refused rather than sent upstream.
+export function parseCredential(input) {
+  const s = String(input ?? "").trim()
+  if (!s) return null
+  // only an http(s) address is a callback URL; `tenant:jwt` also parses as a
+  // URL with the tenant as its scheme, which is not one
+  if (/^https?:\/\//i.test(s)) {
+    try {
+      const u = new URL(s)
+      const token = u.searchParams.get("token")
+      if (token && token.trim()) return { kind: "token", value: token.trim() }
+      const code = u.searchParams.get("code")
+      if (code && code.trim()) return { kind: "code", value: code.trim() }
+      return null
+    } catch {}
+  }
+  if (/^[A-Za-z0-9_-]{1,64}:[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(s)) return { kind: "token", value: s }
+  if (/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(s)) return { kind: "token", value: s }
+  if (/^ucc\.[A-Za-z0-9_-]{8,}$/i.test(s)) return { kind: "code", value: s }
+  if (/^[A-Za-z0-9]{1,16}\.[A-Za-z0-9_-]{16,}$/.test(s)) return { kind: "code", value: s }
+  return null
+}
+
+// parseExchange reads the trade's answer. The gateway has answered as JSON
+// (`token`, `data.token`), as a bare JWT in the body, and via a redirect whose
+// Location carries it; all three are accepted, and a tenant the answer names is
+// put back in front of a bare JWT the way X-Token spells it.
+export function parseExchange(text, location) {
+  const out = { token: "", deviceId: "", installId: "", tenant: "", error: "" }
+  let json = null
+  try { json = JSON.parse(text) } catch {}
+  const take = (v) => {
+    if (!v || typeof v !== "object") return ""
+    for (const k of ["token", "access_token", "accessToken", "jwt", "id_token"]) {
+      const val = v[k]
+      if (typeof val !== "string") continue
+      // the gateway may answer with the bare JWT or the app's `tenant:jwt`
+      if (val.startsWith("eyJ") || /^[A-Za-z0-9_-]{1,64}:eyJ/.test(val)) return val
+    }
+    return ""
+  }
+  if (json && typeof json === "object") {
+    out.token = take(json) || take(json.data) || ""
+    const src = json.data && typeof json.data === "object" ? json.data : json
+    const str = (k) => (typeof src?.[k] === "string" && src[k] ? src[k] : "")
+    out.deviceId = str("deviceId") || str("device_id")
+    out.installId = str("installId") || str("install_id")
+    out.tenant = str("tenant") || str("tenantId") || str("tenant_id")
+    if (typeof json.error === "string") out.error = json.error
+    // a refused trade may name only a message and a code
+    if (!out.error && typeof json.message === "string" && json.message) out.error = json.message
+  }
+  if (!out.token) {
+    const m = JWT_RE.exec(String(text ?? ""))
+    if (m) out.token = m[0]
+  }
+  if (!out.token && location) {
+    const m = JWT_RE.exec(String(location))
+    if (m) out.token = m[0]
+  }
+  if (out.token && out.tenant && !out.token.includes(":")) out.token = out.tenant + ":" + out.token
+  return out
+}
+
+export async function exchangeCode(code, { fetchImpl = fetch, base = SAPI, userAgent = "Mozilla/5.0", timeoutMs = 20000 } = {}) {
+  const c = String(code ?? "").trim()
+  if (!c) throw new Error("兑换会话令牌需要网页登录回调里的 code")
+  const url = base + "/cowork/auth?code=" + encodeURIComponent(c)
+  const res = await fetchImpl(url, {
+    headers: { "user-agent": userAgent, accept: "application/json, text/plain, */*" },
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+  const text = await res.text()
+  const out = parseExchange(text, res.headers?.get?.("location") ?? "")
+  if (!out.token) {
+    const why = out.error ? `：${out.error}` : ""
+    throw new Error(`TeleAgent 没有把 code 换成会话令牌（HTTP ${res.status}${why}）`)
+  }
+  return out
+}
+
+// jwtClaims reads the payload without verifying it: the panel only needs a
+// name and an expiry, and the gateway refuses a forged token anyway.
+export function jwtClaims(token) {
+  const raw = String(token ?? "")
+  const jwt = raw.includes(":") ? raw.slice(raw.indexOf(":") + 1) : raw
+  const parts = jwt.split(".")
+  if (parts.length !== 3) return null
+  const p = parts[1].replace(/-/g, "+").replace(/_/g, "/")
+  const padded = p + "=".repeat((4 - (p.length % 4)) % 4)
+  try {
+    const v = JSON.parse(Buffer.from(padded, "base64").toString("utf8"))
+    return v && typeof v === "object" ? v : null
+  } catch {
+    return null
+  }
+}
+
+export function jwtExpiryMs(token) {
+  const exp = Number(jwtClaims(token)?.exp)
+  return Number.isFinite(exp) && exp > 0 ? exp * 1000 : 0
+}
+
+export function accountIdFromToken(token) {
+  const c = jwtClaims(token) ?? {}
+  for (const k of ["accountId", "account_id", "userId", "user_id", "uid", "sub", "phone", "name"]) {
+    if (typeof c[k] === "string" && c[k]) return c[k]
+    if (typeof c[k] === "number" && Number.isFinite(c[k])) return String(c[k])
+  }
+  return "web-" + sha256Hex(token).slice(0, 12)
+}
+
+// ── the welfare portal's daily check-in ─────────────────────────────────────
+// The app's own check-in is two GETs behind the same gateway headers: one that
+// says whether today is done, one that claims it. A missing or expired sign-in
+// answers 200 with an HTML login page rather than an error, so a reply that is
+// not JSON is never a done check-in.
+export const CHECKIN = {
+  dayTask: SAPI + "/user/portal/companyStore/v2/checkDayTask",
+  claim: SAPI + "/user/portal/companyStore/checkTask",
+  claimType: "daily_login",
+}
+
+function findKey(v, pred, depth = 0) {
+  if (!v || typeof v !== "object" || depth > 8) return null
+  for (const [k, val] of Object.entries(v)) {
+    if (pred(k)) return { key: k, value: val }
+    const hit = findKey(val, pred, depth + 1)
+    if (hit) return hit
+  }
+  return null
+}
+
+export function parseDayTask(json) {
+  const claimed = findKey(json, (k) => k === "claimed_today" || k === "claimedToday")
+  const streak = findKey(json, (k) => k === "continuous_days" || k === "continuousDays" || k === "days")
+  const points = findKey(json, (k) => k === "points")
+  return {
+    claimed: claimed?.value === true,
+    streak: num(streak?.value) ?? 0,
+    points: points?.value == null ? "" : String(points.value),
+  }
+}
+
+export function parseCheckTask(json) {
+  const code = String(json?.code ?? "").trim()
+  const message = typeof json?.message === "string" ? json.message : ""
+  return { ok: code === "" || code === "0" || code === "200", code, message }
+}
+
+// needsSignIn tells a JSON answer from the login page the gateway serves with
+// HTTP 200 once the token is gone.
+export function needsSignIn(status, contentType, text) {
+  if (status === 401 || status === 403) return true
+  const ct = String(contentType ?? "").toLowerCase()
+  const body = String(text ?? "").trim()
+  if (body.startsWith("<")) return true
+  if (ct) return !ct.includes("json")
+  // no content type: a JSON object or array is an answer, anything else is not
+  return !(body.startsWith("{") || body.startsWith("["))
 }

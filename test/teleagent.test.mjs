@@ -259,7 +259,10 @@ test("userDirs lists accounts by their own sign-in file, newest first", () => {
 
 test("the provider's own paths and endpoint strings are the ones measured", () => {
   const p = pathsFor("/home/x")
-  assert.equal(p.root, join("/home/x", ".local", "share", "TeleAgent"))
+  const root = process.platform === "darwin"
+    ? join("/home/x", "Library", "Application Support", "TeleAgent")
+    : join("/home/x", ".local", "share", "TeleAgent")
+  assert.equal(p.root, root)
   assert.equal(p.localState, join(p.root, "Local State"))
   assert.equal(p.users, join(p.root, "users"))
   assert.equal(SAPI, "https://agent.teleai.com.cn/superCowork/sapi")
