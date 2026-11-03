@@ -34,5 +34,8 @@
   "scripts": {
     "test": "node --test",
     "mutate": "node scripts/mutate.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.64.1"
   }
 }

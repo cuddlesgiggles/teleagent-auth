@@ -30,6 +30,29 @@ const MUTS = [
   ["teleagent.mjs", "the shipped relay constant is emptied",
     'export const DEFAULT_RELAY_KEY = "sk-qvp4m6h9g20uM6PgYP7E"',
     'export const DEFAULT_RELAY_KEY = ""'],
+  ["teleagent.mjs", "a web sign-in code is not recognised as a code",
+    "if (/^ucc\\.", "if (/^zzz\\."],
+  ["teleagent.mjs", "the code trade drops the code from its URL",
+    '"/cowork/auth?code="', '"/cowork/auth?grant="'],
+  ["teleagent.mjs", "a check-in answer of 0 is refused",
+    'return { ok: code === "" || code === "0" || code === "200", code, message }',
+    'return { ok: code === "", code, message }'],
+  ["teleagent.mjs", "a seat bound to one account falls back to the newest",
+    "  if (want) {", "  if (false) {"],
+  ["teleagent.mjs", "an HTML 200 is read as a real answer",
+    'if (body.startsWith("<")) return true', 'if (body.startsWith("<")) return false'],
+  ["index.mjs", "a machine without device-meta sends no device pair",
+    "if (!device.deviceId || !device.installId) {", "if (false) {"],
+  ["weblogin.mjs", "the protocol box is never ticked",
+    "await session.frame.click(LOGIN_SELECTORS.agree).catch(() => {})", "void 0"],
+  ["weblogin.mjs", "a cookie other than X-Token is preferred",
+    'const TOKEN_COOKIES = ["X-Token", "operationToken", "operToken"]',
+    'const TOKEN_COOKIES = ["operationToken", "X-Token", "operToken"]'],
+  ["weblogin.mjs", "any phone number is accepted",
+    "return /^1[3-9]\\d{9}$/.test(digits) ? digits : null", "return digits"],
+  ["weblogin.mjs", "the transient login token is taken for the session token",
+    'pickSessionToken(await session.ctx.cookies(), { onlySession: true })',
+    'pickSessionToken(await session.ctx.cookies(), { onlySession: false })'],
 ];
 
 rmSync(DST, { recursive: true, force: true });
@@ -37,7 +60,7 @@ let bad = 0;
 for (let i = 0; i < MUTS.length; i++) {
   const [file, label, old, neu] = MUTS[i];
   const d = join(DST, "m" + i);
-  cpSync(SRC, d, { recursive: true, filter: (s) => !s.includes(join(SRC, ".git")) && !s.includes(".mut") });
+  cpSync(SRC, d, { recursive: true, filter: (s) => !s.includes(join(SRC, ".git")) && !s.includes(join(SRC, "node_modules")) && !s.includes(".mut") });
   const p = join(d, file);
   const code = readFileSync(p, "utf8");
   const at = code.indexOf(old);
